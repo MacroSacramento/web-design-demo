@@ -1,134 +1,122 @@
-import { HTMLMotionProps, motion, useScroll, useTransform } from "motion/react";
+import { motion, useScroll, useTransform, useMotionValueEvent, HTMLMotionProps } from "framer-motion";
 import { RefObject, useCallback, useEffect, useRef, useState } from "react";
-import { demuxVideoWithLibav } from "@/lib/video-helpers";
 
 interface ScrollyVideoProps extends HTMLMotionProps<"canvas"> {
     video: string;
     containerRef: RefObject<HTMLDivElement>;
-    onDecodeProgress?: (progress: number) => void;
+    onLoadProgress?: (progress: number) => void;
 }
 
-function ScrollyVideo({ video, containerRef, onDecodeProgress, ...props }: ScrollyVideoProps) {
+function ScrollyVideo({ video, containerRef, onLoadProgress, ...props }: ScrollyVideoProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-
-    const [imageBmps, setImageBmps] = useState<ImageBitmap[]>([]);
-    const [currentFrame, setCurrentFrame] = useState(0);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const [frames, setFrames] = useState<ImageBitmap[]>([]);
 
     const { scrollYProgress } = useScroll({
         target: containerRef,
         offset: ["start start", "end end"],
     });
-    const videoProgress = useTransform(scrollYProgress, [0, 1], [0, 1]);
+
+    const frameIndex = useTransform(scrollYProgress, [0, 1], [0, frames.length - 1], {
+        clamp: true
+    });
 
     useEffect(() => {
-        let isCancelled = false; // in case component unmounts mid‐decode
-
-        const decodeFrames = async () => {
-            try {
-                onDecodeProgress?.(0);
-
-                // 1) Demux
-                const { packets, extradata, codecName } = await demuxVideoWithLibav(video);
-                const imgBmps: ImageBitmap[] = [];
-                const MAX_FRAMES = 60; // Limit to 100 frames
-                const interval = Math.max(1, Math.floor(packets.length / MAX_FRAMES));
-
-                // 2) Create VideoDecoder
-                const decoder = new VideoDecoder({
-                    output: async (frame) => {
-                        try {
-                            if (imageBmps.length % interval !== 0) return;
-                            const bitmap = await createImageBitmap(frame);
-                            imgBmps.push(bitmap);
-                        } finally {
-                            // Always close the frame to avoid GC warnings
-                            frame.close();
-                        }
-                    },
-                    error: (e) => console.error("Decoder error:", e),
-                });
-
-                // 3) Configure decoder
-                let config: VideoDecoderConfig;
-                if (codecName === "h264") {
-                    config = {
-                        codec: "avc1.640029", // Example: H.264
-                        description: extradata ?? undefined
-                    };
-                } else if (codecName === "vp9") {
-                    config = {
-                        codec: "vp09.00.10.08", // Example: VP9
-                        description: extradata ?? undefined
-                    };
-                } else {
-                    throw new Error(`Unsupported codec: ${codecName}`);
-                }
-                decoder.configure(config);
-
-                // 4) Decode frames and update progress
-                for (let i = 0; i < packets.length; i++) {
-                    if (isCancelled) return;
-                    const p = packets[i];
-                    const chunk = new EncodedVideoChunk({
-                        timestamp: p.pts,
-                        type: p.isKey ? "key" : "delta",
-                        data: p.data
-                    });
-                    decoder.decode(chunk);
-
-                    onDecodeProgress?.(Math.floor((i + 1) / packets.length * 100)); // update progress
-                    await new Promise((r) => setTimeout(r, 0));
-                }
-
-                // 5) Wait for final decode
-                await decoder.flush();
-
-                if (!isCancelled) {
-                    setImageBmps(imgBmps);
-                    console.log("Done decoding!");
-                }
-            } catch (err) {
-                console.error("Error in decodeFrames:", err);
-            }
-        };
-
-        decodeFrames();
-
-        // Setup canvas size & scaling
         const canvas = canvasRef.current;
-        if (canvas) {
-            const ctx = canvas.getContext("2d");
-            if (ctx) {
-                // Scale to device pixel ratio
-                const scale = window.devicePixelRatio || 1;
-                const width = canvas.clientWidth;
-                const height = canvas.clientHeight;
-                canvas.width = width * scale;
-                canvas.height = height * scale;
-                ctx.scale(scale, scale);
+        if (!canvas) return;
 
-                // Set smoothing
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = "high";
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        // Scale canvas for high DPI screens
+        const dpr = window.devicePixelRatio || 1;
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+
+        ctx.scale(dpr, dpr);
+    }, []);
+
+    // Preload frames when component mounts
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        const tempCanvas = document.createElement("canvas");
+        const ctx = tempCanvas.getContext("2d");
+        if (!ctx) return;
+
+        const frameArray: ImageBitmap[] = [];
+        let isCancelled = false;
+
+        video.addEventListener("loadeddata", async () => {
+            tempCanvas.width = video.videoWidth;
+            tempCanvas.height = video.videoHeight;
+
+            const MAX_FRAMES = 60;
+            const totalFrames = Math.floor(video.duration * 30);
+            const frameSkip = Math.max(1, Math.floor(totalFrames / MAX_FRAMES));
+
+            console.time("Frame Extraction Speed");
+
+            // 🔥 **1. Play video in 2x speed for preloading**
+            video.playbackRate = 8.0;
+            video.pause();
+
+            let frameCount = 0;
+            let batchPromises: Promise<ImageBitmap>[] = [];
+
+            while (frameCount < totalFrames && !isCancelled) {
+                if ("fastSeek" in video) {
+                    video.fastSeek((frameCount / totalFrames) * video.duration);
+                } else {
+                    (video as HTMLVideoElement).currentTime = (frameCount / totalFrames) * (video as HTMLVideoElement).duration;
+                }
+
+                // 🏎 **Fast seek and wait for frame readiness**
+                await new Promise((resolve) => video.onseeked = resolve);
+
+                ctx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+                batchPromises.push(createImageBitmap(tempCanvas));
+
+                frameCount += frameSkip; // Skip frames dynamically
+
+                // 🔥 **Process images in batches of 10** (prevents UI freezing)
+                if (batchPromises.length >= 10) {
+                    const bitmaps = await Promise.all(batchPromises);
+                    frameArray.push(...bitmaps);
+                    batchPromises = [];
+                    onLoadProgress?.(Math.floor((frameArray.length / MAX_FRAMES) * 100));
+                }
             }
-        }
 
-        // Cleanup if unmounted
+            // 🏁 **Finish processing remaining frames**
+            if (batchPromises.length > 0) {
+                const bitmaps = await Promise.all(batchPromises);
+                frameArray.push(...bitmaps);
+            }
+
+            console.timeEnd("Frame Extraction Speed");
+            onLoadProgress?.(100);
+            setFrames(frameArray);
+        });
+
         return () => {
             isCancelled = true;
-            onDecodeProgress?.(100);
-            setImageBmps([]);
+            frameArray.forEach((frame) => frame.close()); // Cleanup
         };
-    }, [video]);
+    }, []);
+
 
     const drawImage = useCallback((v: number) => {
         if (!canvasRef.current) return;
         const ctx = canvasRef.current.getContext("2d");
         if (!ctx) return;
 
-        const frameIndex = Math.floor(v * imageBmps.length);
-        setCurrentFrame(frameIndex);
-        const bitmap = imageBmps[frameIndex];
+        const frameIndex = Math.floor(v);
+        const bitmap = frames[frameIndex];
         if (!bitmap) return;
 
         const draw = () => {
@@ -161,26 +149,17 @@ function ScrollyVideo({ video, containerRef, onDecodeProgress, ...props }: Scrol
         };
 
         requestAnimationFrame(draw);
-    }, [imageBmps]);
+    }, [frames]);
 
-    useEffect(() => { drawImage(0); }, [drawImage]);
+    useEffect(() => drawImage(0), [drawImage]);
 
-    useEffect(() => {
-        const handleResize = () => {
-            drawImage(currentFrame / imageBmps.length);
-        };
+    useMotionValueEvent(frameIndex, "change", drawImage);
 
-        window.addEventListener("resize", handleResize);
-        return () => {
-            window.removeEventListener("resize", handleResize);
-        };
-    }, [drawImage, currentFrame, imageBmps.length]);
-
-    videoProgress.on("change", drawImage);
-
-    return <>
-        <motion.canvas ref={canvasRef} {...props} />
-    </>
+    return (
+        <>
+            <motion.canvas ref={canvasRef} {...props} />
+            <video ref={videoRef} src={video} className="hidden" playsInline muted />
+        </>
+    );
 }
-
 export default ScrollyVideo;

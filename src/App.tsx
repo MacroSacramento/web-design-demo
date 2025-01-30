@@ -9,7 +9,6 @@ export default function App() {
     const [progress, setProgress] = useState(0);
     const loading = progress < 100;
 
-    
     const scrollySectionRef = useRef<HTMLDivElement>(null);
     const { scrollYProgress } = useScroll({
         target: scrollySectionRef,
@@ -80,7 +79,7 @@ export default function App() {
                             video={video}
                             containerRef={scrollySectionRef}
                             className="h-full w-full object-cover -z-1"
-                            onDecodeProgress={setProgress}
+                            onLoadProgress={setProgress}
                         />
 
                         <motion.div
@@ -100,7 +99,7 @@ export default function App() {
                         </h1>
                     </div>
 
-                    <div className="flex flex-col">
+                    <div className="flex flex-col z-10">
                         <InfoCard title="Section 1" image="https://placehold.co/400">
                             Lorem ipsum dolor sit amet, consectetur adipiscing elit. Quisque tincidunt justo a velit commodo sollicitudin. Class aptent taciti sociosqu ad litora torquent per conubia nostra, per inceptos himenaeos. Maecenas et leo aliquet, auctor nunc at, placerat velit. Fusce non tempor est, vestibulum ornare libero. Vestibulum in elementum diam. Proin dictum ligula sit amet velit porta sollicitudin. Duis sem purus, semper quis risus semper, malesuada lacinia mauris.
                         </InfoCard>
