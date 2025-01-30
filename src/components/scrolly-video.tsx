@@ -30,34 +30,15 @@ function ScrollyVideo({ video, containerRef, onDecodeProgress, ...props }: Scrol
                 // 1) Demux
                 const { packets, extradata, codecName } = await demuxVideoWithLibav(video);
                 const imgBmps: ImageBitmap[] = [];
+                const MAX_FRAMES = 60; // Limit to 100 frames
+                const interval = Math.max(1, Math.floor(packets.length / MAX_FRAMES));
 
                 // 2) Create VideoDecoder
                 const decoder = new VideoDecoder({
                     output: async (frame) => {
                         try {
-                            const { codedWidth: width, codedHeight: height, visibleRect: rect } = frame;
-                            if (!rect) {
-                                console.error("Frame visibleRect is null");
-                                return;
-                            }
-                            // Copy RGBA
-                            const rgbaBuffer = new Uint8Array(width * height * 4);
-                            await frame.copyTo(rgbaBuffer, {
-                                format: "RGBA",
-                                rect: {
-                                    height: rect.height,
-                                    width: rect.width,
-                                    x: rect.x,
-                                    y: rect.y,
-                                }
-                            } as VideoFrameCopyToOptions);
-                            // Create ImageBitmap
-                            const imageData = new ImageData(
-                                new Uint8ClampedArray(rgbaBuffer.buffer),
-                                width,
-                                height
-                            );
-                            const bitmap = await createImageBitmap(imageData);
+                            if (imageBmps.length % interval !== 0) return;
+                            const bitmap = await createImageBitmap(frame);
                             imgBmps.push(bitmap);
                         } finally {
                             // Always close the frame to avoid GC warnings

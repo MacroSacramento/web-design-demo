@@ -1,4 +1,4 @@
-import LibAV from "libav.js";
+import LibAV from "@libav.js/variant-default";
 
 export async function demuxVideoWithLibav(url: string) {
     // 1) Fetch file
