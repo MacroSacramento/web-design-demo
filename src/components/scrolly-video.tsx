@@ -50,7 +50,7 @@ function ScrollyVideo({ video, containerRef, onDecodeProgress, ...props }: Scrol
                                     x: rect.x,
                                     y: rect.y,
                                 }
-                            });
+                            } as VideoFrameCopyToOptions);
                             // Create ImageBitmap
                             const imageData = new ImageData(
                                 new Uint8ClampedArray(rgbaBuffer.buffer),
