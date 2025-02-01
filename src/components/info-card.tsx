@@ -11,7 +11,7 @@ function InfoCard({
 }: InfoCardProps) {
     return (
         <section
-            className="h-screen flex items-center odd:place-self-end"
+            className="h-[200vh] sm:h-screen flex items-center odd:place-self-end"
         >
             <div className={"max-w-2xl bg-white/80 m-4 rounded drop-shadow-lg flex flex-col sm:flex-row gap-4 " + (image != null ? "px-10 py-5" : "p-10")}>
                 {image && (

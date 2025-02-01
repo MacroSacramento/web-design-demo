@@ -75,6 +75,7 @@ export default function ScrollyVideo({
     const { scrollYProgress } = useScroll({
         target: containerRef,
         offset: ["start start", "end end"],
+        layoutEffect: false
     });
 
     /**
@@ -198,97 +199,140 @@ export default function ScrollyVideo({
         let isCancelled = false;
         let frameArray: ImageBitmap[] = [];
 
-        // Temporary offscreen canvas to draw & convert to ImageBitmap
+        // Offscreen canvas for drawing frames
         const tempCanvas = document.createElement("canvas");
         const ctx = tempCanvas.getContext("2d");
         if (!ctx) return;
 
-        /**
-         * Extracts frames after video metadata (width/height/duration) is available.
-         */
         async function extractFrames() {
-            // Ensure video is not playing
-            videoEl.pause();
+            try {
+                // 1) Wait for metadata if not ready
+                if (videoEl.readyState < 1) {
+                    await new Promise<void>((resolve) => {
+                        const onMetadataLoaded = () => {
+                            videoEl.removeEventListener("loadedmetadata", onMetadataLoaded);
+                            resolve();
+                        };
+                        videoEl.addEventListener("loadedmetadata", onMetadataLoaded, { once: true });
+                    });
+                }
 
-            // Determine video dimensions & clamp them to maxWidth/maxHeight
-            const videoWidth = videoEl.videoWidth;
-            const videoHeight = videoEl.videoHeight;
-            const aspect = videoWidth / videoHeight;
+                // 2) Attempt a brief play on iOS to unlock decoding
+                try {
+                    videoEl.muted = true;
+                    videoEl.playsInline = true; // also ensure <video playsInline> in JSX
+                    await videoEl.play();
+                    // Let it play for ~200ms
+                    await new Promise((resolve) => setTimeout(resolve, 200));
+                    videoEl.pause();
+                } catch (err) {
+                    console.warn("Could not auto-play to unlock decoding:", err);
+                }
 
-            let targetWidth = videoWidth;
-            let targetHeight = videoHeight;
+                // 3) Determine scaled extraction dimensions
+                const videoWidth = videoEl.videoWidth;
+                const videoHeight = videoEl.videoHeight;
+                const aspect = videoWidth / videoHeight;
 
-            // Clamp to maxWidth
-            if (targetWidth > maxWidth) {
-                targetWidth = maxWidth;
-                targetHeight = Math.floor(targetWidth / aspect);
-            }
-            // Clamp to maxHeight
-            if (targetHeight > maxHeight) {
-                targetHeight = maxHeight;
-                targetWidth = Math.floor(targetHeight * aspect);
-            }
+                let targetWidth = videoWidth;
+                let targetHeight = videoHeight;
 
-            tempCanvas.width = targetWidth;
-            tempCanvas.height = targetHeight;
+                if (targetWidth > maxWidth) {
+                    targetWidth = maxWidth;
+                    targetHeight = Math.floor(targetWidth / aspect);
+                }
+                if (targetHeight > maxHeight) {
+                    targetHeight = maxHeight;
+                    targetWidth = Math.floor(targetHeight * aspect);
+                }
 
-            const totalDuration = videoEl.duration;
-            const totalFrames = Math.floor(totalDuration * baseFps);
-            const frameSkip = Math.max(1, Math.floor(totalFrames / maxFrames));
+                tempCanvas.width = targetWidth;
+                tempCanvas.height = targetHeight;
 
-            // Seek to frames in increments and extract
-            for (
-                let frameCount = 0;
-                frameCount < totalFrames && !isCancelled;
-                frameCount += frameSkip
-            ) {
-                const seekTime = (frameCount / totalFrames) * totalDuration;
-                videoEl.currentTime = seekTime;
+                // 4) Calculate how many frames to extract
+                const totalDuration = videoEl.duration;
+                const totalFrames = Math.floor(totalDuration * baseFps);
+                const frameSkip = Math.max(1, Math.floor(totalFrames / maxFrames));
 
-                // Wait for the browser to decode the frame
-                await new Promise<void>((resolve) => {
-                    const onSeeked = () => {
-                        videoEl.removeEventListener("seeked", onSeeked);
-                        resolve();
-                    };
-                    videoEl.addEventListener("seeked", onSeeked);
-                });
+                // 5) Loop over frames
+                for (let frameCount = 0; frameCount < totalFrames; frameCount += frameSkip) {
+                    if (isCancelled) break;
 
-                ctx?.drawImage(videoEl, 0, 0, targetWidth, targetHeight);
+                    // 5a) Seek to the correct time
+                    const seekTime = (frameCount / totalFrames) * totalDuration;
+                    videoEl.currentTime = seekTime;
 
-                if (isCancelled) break;
-                const bitmap = await createImageBitmap(tempCanvas);
-                frameArray.push(bitmap);
-                const loadProgress = (frameCount / totalFrames) * 100;
-                if (loadProgress != 100) onLoadProgress?.(loadProgress);
-            }
+                    // 5b) Wait for "seeked"
+                    await new Promise<void>((resolve) => {
+                        const handleSeeked = () => {
+                            videoEl.removeEventListener("seeked", handleSeeked);
+                            resolve();
+                        };
+                        videoEl.addEventListener("seeked", handleSeeked);
+                    });
 
-            // Final progress = 100%
-            onLoadProgress?.(99);
+                    // 5c) Wait until enough data is buffered to draw
+                    while (videoEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+                        // canplay or canplaythrough -> indicates enough data to play forward
+                        await new Promise<void>((resolve) => {
+                            const onCanPlay = () => {
+                                videoEl.removeEventListener("canplay", onCanPlay);
+                                resolve();
+                            };
+                            videoEl.addEventListener("canplay", onCanPlay, { once: true });
+                        });
+                        if (isCancelled) break;
+                    }
 
-            // Update frames state if extraction not cancelled
-            if (!isCancelled) {
-                setFrames(frameArray);
+                    if (isCancelled) break;
+
+                    // 5d) Draw the frame onto the offscreen canvas
+                    ctx?.drawImage(videoEl, 0, 0, targetWidth, targetHeight);
+
+                    // 5e) Convert to ImageBitmap
+                    try {
+                        const bitmap = await createImageBitmap(tempCanvas);
+                        frameArray.push(bitmap);
+
+                        // 5f) Update progress
+                        const progress = Math.floor((frameArray.length / maxFrames) * 100);
+                        if (progress < 100) onLoadProgress?.(progress);
+                    } catch (err) {
+                        console.error("Failed to create ImageBitmap", err);
+                    }
+                }
+
+                // Final progress = 100%
+                onLoadProgress?.(100);
+
+                // 6) If not cancelled, store the frames
+                if (!isCancelled) {
+                    setFrames(frameArray);
+                }
+            } catch (error) {
+                console.error("Error extracting frames:", error);
             }
         }
 
-        // Once we have video metadata (dimensions, duration), start extracting
-        const onMetadataLoaded = () => {
-            videoEl.removeEventListener("loadedmetadata", onMetadataLoaded);
-            extractFrames().catch(() => {
-                /* Handle or log errors as needed */
-            });
-        };
-        videoEl.addEventListener("loadedmetadata", onMetadataLoaded, { once: true });
+        // Kick off extraction
+        extractFrames();
 
-        // Cleanup
+        // Cleanup on unmount
         return () => {
             isCancelled = true;
-            videoEl.removeEventListener("loadedmetadata", onMetadataLoaded);
             frameArray.forEach((bitmap) => bitmap.close());
             frameArray = [];
+            setFrames([]);
+            onLoadProgress?.(0);
         };
-    }, [onLoadProgress, maxWidth, maxHeight, maxFrames, baseFps]);
+    }, [
+        video,
+        maxWidth,
+        maxHeight,
+        baseFps,
+        maxFrames,
+        onLoadProgress, // or any other props you rely on
+    ]);
 
     return (
         <>
@@ -302,7 +346,15 @@ export default function ScrollyVideo({
             * Hidden <video> element used only for decoding frames. 
             * 'playsInline' ensures mobile browsers handle inline playback.
             */}
-            <video ref={videoRef} src={video} className="hidden" playsInline muted />
+            <video
+                ref={videoRef}
+                src={video}
+                playsInline
+                muted
+                autoPlay
+                crossOrigin="anonymous"
+                className="hidden"
+            />
         </>
     );
 }
