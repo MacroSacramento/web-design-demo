@@ -97,6 +97,7 @@ export default function App() {
                             containerRef={scrollySectionRef}
                             className="h-full w-full object-cover -z-1"
                             onLoadProgress={setProgress}
+                            maxFrames={60}
                         />
 
                         <motion.div
