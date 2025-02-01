@@ -52,7 +52,7 @@ export default function ScrollyVideo({
     containerRef,
     maxWidth = 1920,
     maxHeight = 1080,
-    maxFrames = 60,
+    maxFrames = 30,
     baseFps = 30,
     ...props
 }: ScrollyVideoProps) {
@@ -92,7 +92,7 @@ export default function ScrollyVideo({
      * Also keep track of that index in currentFrameRef for re-drawing.
      */
     frameIndex.on("change", (v) => {
-        if (v < 0 || v == null) 
+        if (v < 0 || v == null)
             v = 0;
 
         const idx = Math.round(v);
@@ -236,9 +236,6 @@ export default function ScrollyVideo({
             const totalFrames = Math.floor(totalDuration * baseFps);
             const frameSkip = Math.max(1, Math.floor(totalFrames / maxFrames));
 
-            let extractedCount = 0;
-            const batchPromises: Promise<ImageBitmap>[] = [];
-
             // Seek to frames in increments and extract
             for (
                 let frameCount = 0;
@@ -258,25 +255,12 @@ export default function ScrollyVideo({
                 });
 
                 ctx?.drawImage(videoEl, 0, 0, targetWidth, targetHeight);
-                batchPromises.push(createImageBitmap(tempCanvas));
 
-                // Process small batches to avoid blocking the main thread
-                if (batchPromises.length >= 5) {
-                    const bitmaps = await Promise.all(batchPromises);
-                    frameArray.push(...bitmaps);
-                    batchPromises.length = 0;
-
-                    // Report extraction progress
-                    extractedCount = frameArray.length;
-                    const loadProgress = (extractedCount / totalFrames) * 100;
-                    if (loadProgress != 100) onLoadProgress?.(loadProgress);
-                }
-            }
-
-            // Process any leftover images
-            if (!isCancelled && batchPromises.length) {
-                const bitmaps = await Promise.all(batchPromises);
-                frameArray.push(...bitmaps);
+                if (isCancelled) break;
+                const bitmap = await createImageBitmap(tempCanvas);
+                frameArray.push(bitmap);
+                const loadProgress = (frameCount / totalFrames) * 100;
+                if (loadProgress != 100) onLoadProgress?.(loadProgress);
             }
 
             // Final progress = 100%

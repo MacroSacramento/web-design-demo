@@ -173,7 +173,7 @@ export default function App() {
                 </div>
             </motion.div>
 
-            <div className={"w-full cursor-none bg-black"}>
+            <div className={"w-full cursor-auto sm:cursor-none bg-black"}>
                 <Header />
 
                 <section

@@ -19,7 +19,7 @@ function CustomCursor() {
     // 4) A styled circle that follows the mouse
     return (
         <motion.div
-            className="pointer-events-none fixed top-0 left-0 z-50 h-6 w-6 rounded-full bg-black/80 backdrop-blur-sm"
+            className="hidden sm:block pointer-events-none fixed top-0 left-0 z-50 h-6 w-6 rounded-full bg-black/80 backdrop-blur-sm"
             style={{
                 translateX: cursorX,
                 translateY: cursorY,
