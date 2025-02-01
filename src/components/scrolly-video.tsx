@@ -88,6 +88,19 @@ export default function ScrollyVideo({
     );
 
     /**
+     * Each time frameIndex changes, draw the corresponding frame.
+     * Also keep track of that index in currentFrameRef for re-drawing.
+     */
+    frameIndex.on("change", (v) => {
+        if (v < 0 || v == null) 
+            v = 0;
+
+        const idx = Math.round(v);
+        currentFrameRef.current = idx;
+        drawImage(idx);
+    });
+
+    /**
      * Utility to scale the canvas for higher DPI (e.g., on Retina screens)
      * to match the element's layout size.
      */
@@ -173,19 +186,6 @@ export default function ScrollyVideo({
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
     }, [scaleCanvas, drawImage]);
-
-    /**
-     * Each time frameIndex changes, draw the corresponding frame.
-     * Also keep track of that index in currentFrameRef for re-drawing.
-     */
-    useEffect(() => {
-        const unsubscribe = frameIndex.on("change", (v) => {
-            const idx = Math.round(v);
-            currentFrameRef.current = idx;
-            drawImage(idx);
-        });
-        return () => unsubscribe();
-    }, [frameIndex, drawImage]);
 
     /**
      * Extract frames from the <video> once metadata is loaded (dimensions, duration, etc.).
